@@ -7,13 +7,19 @@ local loop = ev.Loop.default
 local json = require("cjson")
 
 local globalEqCache = {}
-local globalLastUpdate = nil
+local globalLastUpdateRender = ""
+local globalEqCacheRender = ""
 
--- return a string to send to clients for the passed updates in eqFeedJson, given the current state in passed eqCache
 local function updateEqCache( eqCache, eqFeedJson )
   local msg = {}
 
   local eqFeed = json.decode(eqFeedJson)
+
+  -- each item that appears in both this eqFeed and eqCache is tagged with nonce.
+  -- After processing the eqFeed, we scan eqCache and remove items without this nonce.
+  -- This allows us to remove cached items which were previously in an eqFeed but are no longer in this eqFeed.
+  -- We assume these removed items have been picked.
+  local nonce = math.random()
 
   for _, item in ipairs(eqFeed) do
     if eqCache[item["id"]] == nil then
@@ -21,18 +27,32 @@ local function updateEqCache( eqCache, eqFeedJson )
       eqCache[item["id"]] = item
       table.insert(msg, string.format("#ly%12s #lg-   #lcnew #lg- #w%s", item["zone"], item["description"]))
     else
-      -- TODO - picked items!!!
       if eqCache[item["id"]]["currentBid"] ~= item["currentBid"] then
-        -- upbid on existing item
         table.insert(msg, string.format("#ly%12s #lg- #lc%5s #lg- #w%s", item["zone"], item["currentBid"], item["description"]))
         eqCache[item["id"]] = item
       end
     end
+    eqCache[item["id"]]["nonce"] = nonce
   end
-  if next(msg) ~= nil then
-    table.insert(msg, 1, "#lw        zone     bid   item\n------------------------------")
+
+  -- scan eqCache and discover items without this nonce
+  toRemove = {}
+  for itemId, _ in pairs(eqCache) do
+    if eqCache[itemId]["nonce"] ~= nonce then
+      table.insert(msg, string.format("#ly%12s #lg-  #lcpicked #lg- #w%s", eqCache[itemId]["zone"], eqCache[itemId]["description"]))
+      table.insert(toRemove, itemId)
+    end
+  end
+
+  -- actually remove items discovered in previous step
+  for _, itemId in ipairs(toRemove) do
+    eqCache[itemId] = nil
+  end
+
+  if #msg > 0 then
+    table.insert(msg, 1, "#w        zone     bid   item\n------------------------------")
     table.insert(msg, 1, "#lwUPS Activity")
-    return table.concat( msg, "\n")
+    return table.concat(msg, "\n")
   else
     return ""
   end
@@ -41,8 +61,6 @@ end
 local function renderEqCache( eqCache )
   local msg = {}
 
-  -- TODO - would be nice to have eq sorted by currentBidTime
-  -- TODO - most of this output is cut off due to max socket:send length. Output isn't buffered.
   for id, item in pairs(eqCache) do
     if item["currentBid"] == json.null then
       table.insert(msg, string.format("#ly%12s #lg-       #lg- #w%s", item["zone"], item["description"]))
@@ -50,10 +68,10 @@ local function renderEqCache( eqCache )
       table.insert(msg, string.format("#ly%12s #lg- #lc%5s #lg- #w%s", item["zone"], item["currentBid"], item["description"]))
     end
   end
-  if next(msg) ~= nil then
-    table.insert(msg, 1, "#lw        zone     bid   item\n------------------------------")
+  if #msg > 0 then
+    table.insert(msg, 1, "#w        zone     bid   item\n------------------------------")
     table.insert(msg, 1, "#lwUPS Recent Eq")
-    return table.concat( msg, "\n")
+    return table.concat(msg, "\n")
   else
     return ""
   end
@@ -67,20 +85,22 @@ function capture(cmd)
   return s
 end
 
-local function cmdUps(client, eqCache)
-  client:msg( "%s", renderEqCache(eqCache))
+local function cmdUps(client)
+  client:msg("%s", globalLastUpdateRender)
 end
 
 chat.command( "ups", "user", function(client)
-  cmdUps(client, globalEqCache)
-end, "Show recent UPS eq")
+  cmdUps(client)
+end, "Show last UPS update")
 
 local function doUpsUpdate()
   local eqFeedJson = capture("curl -m2 " .. chat.config.upsEqFeedUrl .. " 2> /dev/null")
-  globalLastUpdate = updateEqCache(globalEqCache, eqFeedJson)
-  if globalLastUpdate ~= '' then
-    chat.msg( "%s", globalLastUpdate)
+  local updateRender = updateEqCache(globalEqCache, eqFeedJson)
+  if updateRender ~= '' then
+    globalLastUpdateRender = updateRender
+    chat.msg( "%s", globalLastUpdateRender)
   end
+  globalEqCacheRender = renderEqCache(globalEqCache)
 end
 
 ev.Timer.new( doUpsUpdate, 1, chat.config.upsPollIntervalSeconds):start( loop )
