@@ -86,12 +86,12 @@ function capture(cmd)
 end
 
 local function cmdUps(client)
-  client:msg("%s", globalLastUpdateRender)
+  client:msg("%s", globalEqCacheRender)
 end
 
 chat.command( "ups", "user", function(client)
   cmdUps(client)
-end, "Show last UPS update")
+end, "Show UPS eq to you only (warning: spam)")
 
 local function doUpsUpdate()
   local eqFeedJson = capture("curl -m2 " .. chat.config.upsEqFeedUrl .. " 2> /dev/null")
